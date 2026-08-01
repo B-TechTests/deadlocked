@@ -67,6 +67,15 @@ impl AppState {
                 self.send_config();
             }
 
+            if checkbox_hover(
+                ui,
+                "Auto Trigger",
+                "Use triggerbot automatically while the aimbot is active",
+                &mut self.weapon_config().aimbot.auto_trigger,
+            ) {
+                self.send_config();
+            }
+
             if combo_box(
                 ui,
                 "aimbot_mode",

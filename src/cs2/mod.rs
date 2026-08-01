@@ -65,6 +65,7 @@ pub struct CS2 {
     weapon: Weapon,
     planted_c4: Option<PlantedC4>,
     gamescope_geometry: Option<(Vec2, Vec2)>,
+    gamescope_display: Option<String>,
     last_cache: Instant,
 }
 
@@ -81,6 +82,12 @@ impl CS2 {
         utils::info!("process found, pid: {}", process.pid);
         self.process = process;
         self.gamescope_geometry = gamescope_geometry(self.process.pid);
+        self.gamescope_display = self
+            .gamescope_geometry
+            .and_then(|_| process_display(self.process.pid));
+        if let Some(display) = &self.gamescope_display {
+            utils::info!("detected gamescope input display: {display}");
+        }
         if let Some((position, size)) = self.gamescope_geometry {
             utils::info!(
                 "detected gamescope geometry: {}x{} at {},{}",
@@ -136,13 +143,13 @@ impl CS2 {
 
         self.esp_toggle(config);
 
-        self.triggerbot(config);
-
-        self.triggerbot_shoot(mouse);
-
         self.find_target(config);
 
-        if !self.aimbot(config, mouse) {
+        let aimbot_active = self.aimbot(config, mouse);
+        self.triggerbot(config, aimbot_active);
+        self.triggerbot_shoot(mouse);
+
+        if !aimbot_active {
             self.rcs(config, mouse);
         }
     }
@@ -321,6 +328,7 @@ impl CS2 {
             weapon: Weapon::default(),
             planted_c4: None,
             gamescope_geometry: None,
+            gamescope_display: None,
             last_cache: Instant::now(),
         }
     }
@@ -453,6 +461,14 @@ fn gamescope_geometry(mut pid: i32) -> Option<(Vec2, Vec2)> {
     }
 
     None
+}
+
+fn process_display(pid: i32) -> Option<String> {
+    fs::read(format!("/proc/{pid}/environ"))
+        .ok()?
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"DISPLAY="))
+        .map(|display| String::from_utf8_lossy(display).into_owned())
 }
 
 fn x11_window_geometry(pid: i32) -> Option<(Vec2, Vec2)> {

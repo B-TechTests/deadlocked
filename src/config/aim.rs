@@ -33,6 +33,7 @@ impl WeaponConfig {
 pub struct AimbotConfig {
     pub enable_override: bool,
     pub enabled: bool,
+    pub auto_trigger: bool,
     pub mode: KeyMode,
     pub target_friendlies: bool,
     pub distance_adjusted_fov: bool,
@@ -51,6 +52,7 @@ impl Default for AimbotConfig {
         Self {
             enable_override: false,
             enabled: true,
+            auto_trigger: false,
             mode: KeyMode::Hold,
             target_friendlies: false,
             distance_adjusted_fov: true,
@@ -158,5 +160,16 @@ impl Default for AimConfig {
             global: WeaponConfig::enabled(true),
             weapons,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AimbotConfig;
+
+    #[test]
+    fn auto_trigger_is_opt_in_for_existing_configs() {
+        let config: AimbotConfig = toml::from_str("").unwrap();
+        assert!(!config.auto_trigger);
     }
 }

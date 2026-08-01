@@ -22,15 +22,18 @@ pub struct Triggerbot {
 }
 
 impl CS2 {
-    pub fn triggerbot(&mut self, config: &Config) {
+    pub fn triggerbot(&mut self, config: &Config, aimbot_active: bool) {
+        let auto_trigger = aimbot_active && self.aimbot_config(config).auto_trigger;
         let hotkey = config.aim.triggerbot_hotkey;
         let config = self.triggerbot_config(config);
 
-        if !config.enabled {
+        if !config.enabled && !auto_trigger {
             return;
         }
 
-        if !Self::check_hotkey(&self.input, config.mode, hotkey, &mut self.trigger.active) {
+        if !auto_trigger
+            && !Self::check_hotkey(&self.input, config.mode, hotkey, &mut self.trigger.active)
+        {
             return;
         }
 
@@ -100,14 +103,14 @@ impl CS2 {
         if let Some(shot_time) = self.trigger.shot_start
             && now >= shot_time
         {
-            mouse.left_press();
+            mouse.left_press(self.gamescope_display.as_deref());
             self.trigger.shot_start = None;
         }
 
         if let Some(shot_end) = self.trigger.shot_end
             && now >= shot_end
         {
-            mouse.left_release();
+            mouse.left_release(self.gamescope_display.as_deref());
             self.trigger.shot_end = None;
         }
     }
