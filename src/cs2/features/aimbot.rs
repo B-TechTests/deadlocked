@@ -21,6 +21,9 @@ pub struct Aimbot {
     ramp_target: usize,
     ramp_start: f32,
     curve_offset: Vec2,
+    overshoot_offset: Vec2,
+    overshoot_direction: Vec2,
+    overshooting: bool,
     last_move: Option<Instant>,
 }
 
@@ -114,10 +117,12 @@ impl CS2 {
                 .is_none_or(|last| now.duration_since(last) > Duration::from_millis(100));
         if new_transition {
             self.aim.ramp_target = target.pawn;
-            self.aim.ramp_start = aim_angles.length().max(f32::EPSILON);
             self.aim.inertia = Vec2::ZERO;
             self.aim.remainder = Vec2::ZERO;
             self.aim.curve_offset = Vec2::ZERO;
+            self.aim.overshoot_offset = Vec2::ZERO;
+            self.aim.overshoot_direction = Vec2::ZERO;
+            self.aim.overshooting = false;
         }
         self.aim.last_move = Some(now);
 
@@ -132,12 +137,35 @@ impl CS2 {
             let direction = direct_mouse.normalize_or_zero();
             self.aim.curve_offset =
                 vec2(-direction.y, direction.x) * rng().random_range(-curve..=curve);
+
+            let (min, max) = if config.overshoot.start() <= config.overshoot.end() {
+                (*config.overshoot.start(), *config.overshoot.end())
+            } else {
+                (*config.overshoot.end(), *config.overshoot.start())
+            };
+            self.aim.overshoot_direction = direction;
+            self.aim.overshoot_offset = direction * rng().random_range(min.max(0.0)..=max.max(0.0));
+            self.aim.overshooting =
+                direction != Vec2::ZERO && self.aim.overshoot_offset != Vec2::ZERO;
+            self.aim.ramp_start = (direct_mouse + self.aim.overshoot_offset)
+                .length()
+                .max(f32::EPSILON);
+        } else if self.aim.overshooting
+            && direct_mouse.dot(self.aim.overshoot_direction) <= -self.aim.overshoot_offset.length()
+        {
+            self.aim.overshooting = false;
+            self.aim.overshoot_offset = Vec2::ZERO;
+            self.aim.curve_offset = Vec2::ZERO;
+            self.aim.ramp_start = direct_mouse.length().max(f32::EPSILON);
+            self.aim.inertia = Vec2::ZERO;
+            self.aim.remainder = Vec2::ZERO;
         }
 
-        let remaining = (aim_angles.length() / self.aim.ramp_start).clamp(0.0, 1.0);
+        let movement_target = direct_mouse + self.aim.overshoot_offset;
+        let remaining = (movement_target.length() / self.aim.ramp_start).clamp(0.0, 1.0);
         let progress = 1.0 - remaining;
         let curve = self.aim.curve_offset * (std::f32::consts::PI * progress).sin();
-        let mouse_angles = (direct_mouse + curve) / (config.smooth + 1.0).clamp(1.0, 20.0);
+        let mouse_angles = (movement_target + curve) / (config.smooth + 1.0).clamp(1.0, 20.0);
 
         let alpha = 1.0 - config.inertia.clamp(0.0, 1.0) * 0.5;
         self.aim.inertia += (mouse_angles - self.aim.inertia) * alpha;
@@ -147,6 +175,7 @@ impl CS2 {
             TransitionRamp::EaseOut => 1.0 - (1.0 - remaining).powi(2),
             TransitionRamp::SmoothStep => remaining * remaining * (3.0 - 2.0 * remaining),
         };
+        let ramp = 0.2 + ramp * 0.8;
         let movement = self.aim.inertia * ramp + self.aim.remainder;
         let ready = movement.trunc();
         self.aim.remainder = movement - ready;

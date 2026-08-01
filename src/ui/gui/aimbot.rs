@@ -172,6 +172,17 @@ impl AppState {
                 self.send_config();
             }
 
+            if ui
+                .add(DragRange::new(
+                    "Overshoot Min / Max (px)",
+                    &mut self.weapon_config().aimbot.overshoot,
+                    0.0..=100.0,
+                ))
+                .changed()
+            {
+                self.send_config();
+            }
+
             if drag(
                 ui,
                 "Start Bullet",

@@ -45,6 +45,7 @@ pub struct AimbotConfig {
     pub transition_ramp: TransitionRamp,
     pub movement_curve: f32,
     pub aimpoint_randomization: Vec2,
+    pub overshoot: RangeInclusive<f32>,
     pub bones: Vec<Bones>,
     pub targeting_mode: TargetingMode,
 }
@@ -66,6 +67,7 @@ impl Default for AimbotConfig {
             transition_ramp: TransitionRamp::SmoothStep,
             movement_curve: 0.0,
             aimpoint_randomization: Vec2::ZERO,
+            overshoot: 0.0..=0.0,
             bones: vec![
                 Bones::Head,
                 Bones::Neck,
