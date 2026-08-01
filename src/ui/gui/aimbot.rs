@@ -290,6 +290,27 @@ impl AppState {
             ) {
                 self.send_config();
             }
+
+            if checkbox_hover(
+                ui,
+                "Accuracy Check",
+                "Only shoot when live weapon accuracy meets the minimum threshold",
+                &mut self.weapon_config().triggerbot.accuracy_check,
+            ) {
+                self.send_config();
+            }
+
+            if drag(
+                ui,
+                "Minimum Accuracy",
+                DragValue::new(&mut self.weapon_config().triggerbot.accuracy_threshold)
+                    .range(0.0..=100.0)
+                    .suffix("%")
+                    .speed(0.1)
+                    .max_decimals(1),
+            ) {
+                self.send_config();
+            }
         });
 
         collapsing_open(ui, "RCS", |ui| {

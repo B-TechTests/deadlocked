@@ -141,10 +141,12 @@ pub struct AimPunchServicesOffsets {
 
 #[derive(Default)]
 pub struct WeaponOffsets {
-    pub attribute_manager: usize, // AttributeContainer (m_AttributeManager)
-    pub item: usize,              // EconItemView (m_Item)
-    pub clip_primary: usize,      // i32 (m_iClip1)
-    pub reserve_ammo: usize,      // i32[2] (m_pReserveAmmo)
+    pub attribute_manager: usize,  // AttributeContainer (m_AttributeManager)
+    pub item: usize,               // EconItemView (m_Item)
+    pub clip_primary: usize,       // i32 (m_iClip1)
+    pub reserve_ammo: usize,       // i32[2] (m_pReserveAmmo)
+    pub accuracy_penalty: usize,   // f32 (m_fAccuracyPenalty)
+    pub turning_inaccuracy: usize, // f32 (m_flTurningInaccuracy)
 }
 
 #[derive(Default)]

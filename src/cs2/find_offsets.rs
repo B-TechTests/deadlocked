@@ -215,6 +215,9 @@ impl CS2 {
         offsets.weapon.item = client.get("C_AttributeContainer", "m_Item")?;
         offsets.weapon.clip_primary = client.get("C_BasePlayerWeapon", "m_iClip1")?;
         offsets.weapon.reserve_ammo = client.get("C_BasePlayerWeapon", "m_pReserveAmmo")?;
+        offsets.weapon.accuracy_penalty = client.get("C_CSWeaponBase", "m_fAccuracyPenalty")?;
+        offsets.weapon.turning_inaccuracy =
+            client.get("C_CSWeaponBase", "m_flTurningInaccuracy")?;
 
         offsets.econ_item_view.item_definition_index =
             client.get("C_EconItemView", "m_iItemDefinitionIndex")?;

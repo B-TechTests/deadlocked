@@ -34,13 +34,25 @@ impl CS2 {
             return;
         }
 
-        if self.trigger.shot_start.is_some() || self.trigger.shot_end.is_some() {
-            return;
-        }
-
         let Some(local_player) = Player::local_player(self) else {
             return;
         };
+
+        if config.accuracy_check
+            && local_player
+                .weapon_accuracy(self)
+                .is_none_or(|accuracy| accuracy < config.accuracy_threshold.clamp(0.0, 100.0))
+        {
+            if self.trigger.shot_start.is_some() {
+                self.trigger.shot_start = None;
+                self.trigger.shot_end = None;
+            }
+            return;
+        }
+
+        if self.trigger.shot_start.is_some() || self.trigger.shot_end.is_some() {
+            return;
+        }
 
         if config.flash_check && local_player.is_flashed(self) {
             return;

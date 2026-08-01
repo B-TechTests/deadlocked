@@ -116,6 +116,8 @@ pub struct TriggerbotConfig {
     pub scope_check: bool,
     pub velocity_check: bool,
     pub velocity_threshold: f32,
+    pub accuracy_check: bool,
+    pub accuracy_threshold: f32,
     pub head_only: bool,
 }
 
@@ -131,6 +133,8 @@ impl Default for TriggerbotConfig {
             scope_check: true,
             velocity_check: true,
             velocity_threshold: 100.0,
+            accuracy_check: false,
+            accuracy_threshold: 90.0,
             head_only: false,
         }
     }

@@ -258,6 +258,20 @@ impl Player {
         cs2.process.read(weapon + cs2.offsets.weapon.reserve_ammo)
     }
 
+    pub fn weapon_accuracy(&self, cs2: &CS2) -> Option<f32> {
+        let weapon = self.weapon_address(cs2)?;
+        let accuracy_penalty: f32 = cs2
+            .process
+            .read(weapon + cs2.offsets.weapon.accuracy_penalty);
+        let turning_inaccuracy: f32 = cs2
+            .process
+            .read(weapon + cs2.offsets.weapon.turning_inaccuracy);
+        let inaccuracy = accuracy_penalty + turning_inaccuracy.max(0.0);
+        inaccuracy
+            .is_finite()
+            .then_some((1.0 - inaccuracy).clamp(0.0, 1.0) * 100.0)
+    }
+
     fn game_scene_node(&self, cs2: &CS2) -> usize {
         cs2.process
             .read(self.pawn + cs2.offsets.pawn.game_scene_node)
