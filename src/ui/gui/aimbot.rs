@@ -67,21 +67,34 @@ impl AppState {
                 self.send_config();
             }
 
-            if checkbox_hover(
-                ui,
-                "Auto Trigger",
-                "Use triggerbot automatically while the aimbot is active",
-                &mut self.weapon_config().aimbot.auto_trigger,
-            ) {
-                self.send_config();
-            }
-
             if combo_box(
                 ui,
                 "aimbot_mode",
                 "Mode",
                 &mut self.weapon_config().aimbot.mode,
             ) {
+                self.send_config();
+            }
+        });
+
+        collapsing_open(ui, "Auto Trigger", |ui| {
+            if checkbox_hover(
+                ui,
+                "Enable Auto Trigger",
+                "Use triggerbot automatically while the aimbot is active",
+                &mut self.weapon_config().aimbot.auto_trigger,
+            ) {
+                self.send_config();
+            }
+
+            if ui
+                .add(DragRange::new(
+                    "Min / Max Delay (ms)",
+                    &mut self.weapon_config().aimbot.auto_trigger_delay,
+                    0..=999,
+                ))
+                .changed()
+            {
                 self.send_config();
             }
         });

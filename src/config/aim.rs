@@ -34,6 +34,7 @@ pub struct AimbotConfig {
     pub enable_override: bool,
     pub enabled: bool,
     pub auto_trigger: bool,
+    pub auto_trigger_delay: RangeInclusive<u64>,
     pub mode: KeyMode,
     pub target_friendlies: bool,
     pub distance_adjusted_fov: bool,
@@ -53,6 +54,7 @@ impl Default for AimbotConfig {
             enable_override: false,
             enabled: true,
             auto_trigger: false,
+            auto_trigger_delay: 5..=20,
             mode: KeyMode::Hold,
             target_friendlies: false,
             distance_adjusted_fov: true,
@@ -171,5 +173,6 @@ mod tests {
     fn auto_trigger_is_opt_in_for_existing_configs() {
         let config: AimbotConfig = toml::from_str("").unwrap();
         assert!(!config.auto_trigger);
+        assert_eq!(config.auto_trigger_delay, 5..=20);
     }
 }

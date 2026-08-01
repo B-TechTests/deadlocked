@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use glam::Vec2;
-use rand::rng;
+use rand::{RngExt as _, rng};
 
 use crate::{
     config::Config,
@@ -18,14 +18,21 @@ use crate::{
 pub struct Triggerbot {
     shot_start: Option<Instant>,
     shot_end: Option<Instant>,
+    auto_trigger_ready: Option<Instant>,
     pub active: bool,
 }
 
 impl CS2 {
     pub fn triggerbot(&mut self, config: &Config, aimbot_active: bool) {
-        let auto_trigger = aimbot_active && self.aimbot_config(config).auto_trigger;
+        let aimbot_config = self.aimbot_config(config);
+        let auto_trigger = aimbot_active && aimbot_config.auto_trigger;
+        let auto_trigger_delay = aimbot_config.auto_trigger_delay.clone();
         let hotkey = config.aim.triggerbot_hotkey;
         let config = self.triggerbot_config(config);
+
+        if !auto_trigger {
+            self.trigger.auto_trigger_ready = None;
+        }
 
         if !config.enabled && !auto_trigger {
             return;
@@ -39,6 +46,11 @@ impl CS2 {
 
         if self.trigger.shot_start.is_some() || self.trigger.shot_end.is_some() {
             return;
+        }
+
+        if auto_trigger && self.trigger.auto_trigger_ready.is_none() {
+            self.trigger.auto_trigger_ready =
+                Some(Instant::now() + random_delay(&auto_trigger_delay));
         }
 
         let Some(local_player) = Player::local_player(self) else {
@@ -84,17 +96,11 @@ impl CS2 {
             }
         }
 
-        let mean = (*config.delay.start() + *config.delay.end()) as f32 / 2.0;
-        let std_dev = (*config.delay.end() - *config.delay.start()) as f32 / 2.0;
-
-        let normal = rand_distr::Normal::new(mean, std_dev).unwrap();
-        use rand_distr::Distribution as _;
-        let delay = normal.sample(&mut rng()).max(0.0) as u64;
-
         let now = Instant::now();
-        let delay = Duration::from_millis(delay);
+        let delay = shot_delay(&config.delay, self.trigger.auto_trigger_ready, now);
         self.trigger.shot_start = Some(now + delay);
         self.trigger.shot_end = Some(now + delay + Duration::from_millis(config.shot_duration));
+        self.trigger.auto_trigger_ready = None;
     }
 
     pub fn triggerbot_shoot(&mut self, mouse: &mut Mouse) {
@@ -114,4 +120,23 @@ impl CS2 {
             self.trigger.shot_end = None;
         }
     }
+}
+
+fn random_delay(delay: &std::ops::RangeInclusive<u64>) -> Duration {
+    let (start, end) = if delay.start() <= delay.end() {
+        (*delay.start(), *delay.end())
+    } else {
+        (*delay.end(), *delay.start())
+    };
+    Duration::from_millis(rng().random_range(start..=end))
+}
+
+fn shot_delay(
+    delay: &std::ops::RangeInclusive<u64>,
+    auto_trigger_ready: Option<Instant>,
+    now: Instant,
+) -> Duration {
+    auto_trigger_ready
+        .map(|ready| ready.saturating_duration_since(now))
+        .unwrap_or_else(|| random_delay(delay))
 }
