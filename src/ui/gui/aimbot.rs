@@ -140,6 +140,17 @@ impl AppState {
 
             if drag(
                 ui,
+                "Movement Curve (px)",
+                DragValue::new(&mut self.weapon_config().aimbot.movement_curve)
+                    .range(0.0..=100.0)
+                    .speed(0.1)
+                    .max_decimals(1),
+            ) {
+                self.send_config();
+            }
+
+            if drag(
+                ui,
                 "Start Bullet",
                 DragValue::new(&mut self.weapon_config().aimbot.start_bullet)
                     .range(0..=10)

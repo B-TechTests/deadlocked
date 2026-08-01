@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use glam::{Vec2, vec2};
+use rand::{RngExt as _, rng};
 
 use crate::{
     config::{Config, aim::TransitionRamp},
@@ -19,6 +20,7 @@ pub struct Aimbot {
     remainder: Vec2,
     ramp_target: usize,
     ramp_start: f32,
+    curve_offset: Vec2,
     last_move: Option<Instant>,
 }
 
@@ -115,20 +117,31 @@ impl CS2 {
             self.aim.ramp_start = aim_angles.length().max(f32::EPSILON);
             self.aim.inertia = Vec2::ZERO;
             self.aim.remainder = Vec2::ZERO;
+            self.aim.curve_offset = Vec2::ZERO;
         }
         self.aim.last_move = Some(now);
 
         let sensitivity = self.get_sensitivity() * local_player.fov_multiplier(self);
 
-        let mouse_angles = vec2(
+        let direct_mouse = vec2(
             aim_angles.y / sensitivity * 45.45,
             -aim_angles.x / sensitivity * 45.45,
-        ) / (config.smooth + 1.0).clamp(1.0, 20.0);
+        );
+        if new_transition {
+            let curve = config.movement_curve.max(0.0);
+            let direction = direct_mouse.normalize_or_zero();
+            self.aim.curve_offset =
+                vec2(-direction.y, direction.x) * rng().random_range(-curve..=curve);
+        }
+
+        let remaining = (aim_angles.length() / self.aim.ramp_start).clamp(0.0, 1.0);
+        let progress = 1.0 - remaining;
+        let curve = self.aim.curve_offset * (std::f32::consts::PI * progress).sin();
+        let mouse_angles = (direct_mouse + curve) / (config.smooth + 1.0).clamp(1.0, 20.0);
 
         let alpha = 1.0 - config.inertia.clamp(0.0, 1.0) * 0.5;
         self.aim.inertia += (mouse_angles - self.aim.inertia) * alpha;
 
-        let remaining = (aim_angles.length() / self.aim.ramp_start).clamp(0.0, 1.0);
         let ramp = match config.transition_ramp {
             TransitionRamp::Linear => remaining,
             TransitionRamp::EaseOut => 1.0 - (1.0 - remaining).powi(2),

@@ -43,6 +43,7 @@ pub struct AimbotConfig {
     pub smooth: f32,
     pub inertia: f32,
     pub transition_ramp: TransitionRamp,
+    pub movement_curve: f32,
     pub bones: Vec<Bones>,
     pub targeting_mode: TargetingMode,
 }
@@ -62,6 +63,7 @@ impl Default for AimbotConfig {
             smooth: 5.0,
             inertia: 1.0,
             transition_ramp: TransitionRamp::SmoothStep,
+            movement_curve: 0.0,
             bones: vec![
                 Bones::Head,
                 Bones::Neck,
