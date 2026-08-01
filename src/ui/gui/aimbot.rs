@@ -129,6 +129,15 @@ impl AppState {
                 self.send_config();
             }
 
+            if combo_box(
+                ui,
+                "transition_ramp",
+                "Transition Ramp",
+                &mut self.weapon_config().aimbot.transition_ramp,
+            ) {
+                self.send_config();
+            }
+
             if drag(
                 ui,
                 "Start Bullet",

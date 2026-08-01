@@ -1,7 +1,9 @@
+use std::time::{Duration, Instant};
+
 use glam::{Vec2, vec2};
 
 use crate::{
-    config::Config,
+    config::{Config, aim::TransitionRamp},
     cs2::{
         CS2,
         entity::{player::Player, weapon_class::WeaponClass},
@@ -14,6 +16,10 @@ use crate::{
 pub struct Aimbot {
     pub active: bool,
     inertia: Vec2,
+    remainder: Vec2,
+    ramp_target: usize,
+    ramp_start: f32,
+    last_move: Option<Instant>,
 }
 
 impl CS2 {
@@ -98,6 +104,20 @@ impl CS2 {
         }
         vec2_clamp(&mut aim_angles);
 
+        let now = Instant::now();
+        let new_transition = target.pawn != self.aim.ramp_target
+            || self
+                .aim
+                .last_move
+                .is_none_or(|last| now.duration_since(last) > Duration::from_millis(100));
+        if new_transition {
+            self.aim.ramp_target = target.pawn;
+            self.aim.ramp_start = aim_angles.length().max(f32::EPSILON);
+            self.aim.inertia = Vec2::ZERO;
+            self.aim.remainder = Vec2::ZERO;
+        }
+        self.aim.last_move = Some(now);
+
         let sensitivity = self.get_sensitivity() * local_player.fov_multiplier(self);
 
         let mouse_angles = vec2(
@@ -107,7 +127,17 @@ impl CS2 {
 
         let alpha = 1.0 - config.inertia.clamp(0.0, 1.0) * 0.5;
         self.aim.inertia += (mouse_angles - self.aim.inertia) * alpha;
-        mouse.move_rel(self.aim.inertia);
+
+        let remaining = (aim_angles.length() / self.aim.ramp_start).clamp(0.0, 1.0);
+        let ramp = match config.transition_ramp {
+            TransitionRamp::Linear => remaining,
+            TransitionRamp::EaseOut => 1.0 - (1.0 - remaining).powi(2),
+            TransitionRamp::SmoothStep => remaining * remaining * (3.0 - 2.0 * remaining),
+        };
+        let movement = self.aim.inertia * ramp + self.aim.remainder;
+        let ready = movement.trunc();
+        self.aim.remainder = movement - ready;
+        mouse.move_rel(ready);
 
         self.recoil.previous = local_player.aim_punch(self);
 
