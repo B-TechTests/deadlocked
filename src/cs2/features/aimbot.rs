@@ -126,7 +126,7 @@ impl CS2 {
         let direct_mouse = vec2(
             aim_angles.y / sensitivity * 45.45,
             -aim_angles.x / sensitivity * 45.45,
-        );
+        ) + self.target.aimpoint_offset;
         if new_transition {
             let curve = config.movement_curve.max(0.0);
             let direction = direct_mouse.normalize_or_zero();

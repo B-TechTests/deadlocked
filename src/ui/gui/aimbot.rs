@@ -149,6 +149,29 @@ impl AppState {
                 self.send_config();
             }
 
+            if ui
+                .horizontal(|ui| {
+                    let randomization = &mut self.weapon_config().aimbot.aimpoint_randomization;
+                    let x = ui.add(
+                        DragValue::new(&mut randomization.x)
+                            .prefix("X: ")
+                            .range(0.0..=100.0)
+                            .speed(0.1),
+                    );
+                    let y = ui.add(
+                        DragValue::new(&mut randomization.y)
+                            .prefix("Y: ")
+                            .range(0.0..=100.0)
+                            .speed(0.1),
+                    );
+                    ui.label("Aimpoint Randomisation (px)");
+                    (x | y).changed()
+                })
+                .inner
+            {
+                self.send_config();
+            }
+
             if drag(
                 ui,
                 "Start Bullet",

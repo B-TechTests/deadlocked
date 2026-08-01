@@ -1,4 +1,5 @@
 use glam::Vec2;
+use rand::{RngExt as _, rng};
 use strum::IntoEnumIterator;
 
 use crate::{
@@ -20,6 +21,7 @@ pub struct Target {
     pub bone_index: u64,
     pub local_pawn_index: u64,
     pub previous_aim_punch: Vec2,
+    pub aimpoint_offset: Vec2,
 }
 
 impl Target {
@@ -77,6 +79,7 @@ impl CS2 {
         }
 
         let target_friendlies = aimbot_config.target_friendlies;
+        let previous_target = self.target.player;
 
         for player in &self.players {
             if !(ffa || target_friendlies) && team == player.team(self) {
@@ -107,6 +110,14 @@ impl CS2 {
                 self.target.distance = distance;
                 self.target.bone_index = Bones::Head.u64();
             }
+        }
+
+        if self.target.player != previous_target {
+            let range = aimbot_config.aimpoint_randomization.abs();
+            self.target.aimpoint_offset = Vec2::new(
+                rng().random_range(-range.x..=range.x),
+                rng().random_range(-range.y..=range.y),
+            );
         }
 
         let Some(target) = &self.target.player else {
