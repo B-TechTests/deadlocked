@@ -462,6 +462,7 @@ struct Gamescope {
     output_size: Option<Vec2>,
     x11: Option<GamescopeX11>,
     kwin: Option<GamescopeKwin>,
+    mutter: Option<GamescopeMutter>,
 }
 
 impl Gamescope {
@@ -471,6 +472,7 @@ impl Gamescope {
             output_size,
             x11: GamescopeX11::new(pid),
             kwin: GamescopeKwin::new(pid),
+            mutter: GamescopeMutter::new(pid),
         }
     }
 
@@ -479,6 +481,7 @@ impl Gamescope {
             .as_ref()
             .and_then(GamescopeX11::geometry)
             .or_else(|| self.kwin.as_ref().map(GamescopeKwin::geometry))
+            .or_else(|| self.mutter.as_ref().map(GamescopeMutter::geometry))
             .or_else(|| {
                 self.x11
                     .as_ref()
@@ -491,6 +494,11 @@ impl Gamescope {
             .as_mut()
             .and_then(|x11| x11.update_geometry(self.pid))
             .or_else(|| self.kwin.as_mut().and_then(GamescopeKwin::update_geometry))
+            .or_else(|| {
+                self.mutter
+                    .as_mut()
+                    .and_then(GamescopeMutter::update_geometry)
+            })
     }
 
     fn fallback(&self) -> (Vec2, Vec2) {
@@ -516,7 +524,7 @@ struct GamescopeX11 {
 }
 
 const GAMESCOPE_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
-const KWIN_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(250);
+const COMPOSITOR_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_GAMESCOPE_OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
 fn gamescope_geometry_check_due(last_check: Instant) -> bool {
@@ -695,7 +703,7 @@ impl GamescopeKwin {
     }
 
     fn update_geometry(&mut self) -> Option<(Vec2, Vec2)> {
-        if self.last_geometry_check.elapsed() < KWIN_GEOMETRY_CHECK_INTERVAL {
+        if self.last_geometry_check.elapsed() < COMPOSITOR_GEOMETRY_CHECK_INTERVAL {
             return None;
         }
         self.last_geometry_check = Instant::now();
@@ -703,6 +711,79 @@ impl GamescopeKwin {
         self.geometry = geometry;
         Some(geometry)
     }
+}
+
+struct GamescopeMutter {
+    pid: i32,
+    geometry: (Vec2, Vec2),
+    last_geometry_check: Instant,
+}
+
+impl GamescopeMutter {
+    fn new(pid: i32) -> Option<Self> {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        if !desktop
+            .split(':')
+            .any(|name| name.eq_ignore_ascii_case("GNOME"))
+        {
+            return None;
+        }
+
+        let geometry = mutter_window_geometry(pid)?;
+        utils::info!("tracking gamescope Mutter window for pid {pid}");
+        Some(Self {
+            pid,
+            geometry,
+            last_geometry_check: Instant::now(),
+        })
+    }
+
+    fn geometry(&self) -> (Vec2, Vec2) {
+        self.geometry
+    }
+
+    fn update_geometry(&mut self) -> Option<(Vec2, Vec2)> {
+        if self.last_geometry_check.elapsed() < COMPOSITOR_GEOMETRY_CHECK_INTERVAL {
+            return None;
+        }
+        self.last_geometry_check = Instant::now();
+        let geometry = mutter_window_geometry(self.pid)?;
+        self.geometry = geometry;
+        Some(geometry)
+    }
+}
+
+fn mutter_window_geometry(pid: i32) -> Option<(Vec2, Vec2)> {
+    let output = command_output(
+        "gdbus",
+        &[
+            "call",
+            "--session",
+            "--dest",
+            "io.github.avitran0.deadlocked.GamescopeTracker",
+            "--object-path",
+            "/io/github/avitran0/deadlocked/GamescopeTracker",
+            "--method",
+            "io.github.avitran0.deadlocked.GamescopeTracker.GetGeometry",
+            &pid.to_string(),
+        ],
+    )?;
+    parse_mutter_geometry(&output)
+}
+
+fn parse_mutter_geometry(output: &str) -> Option<(Vec2, Vec2)> {
+    let mut values = output
+        .trim()
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .split(',')
+        .map(str::trim);
+    if values.next()? != "true" {
+        return None;
+    }
+    let position = Vec2::new(values.next()?.parse().ok()?, values.next()?.parse().ok()?);
+    let size = Vec2::new(values.next()?.parse().ok()?, values.next()?.parse().ok()?);
+    (values.next().is_none() && size.x > 0.0 && size.y > 0.0).then_some((position, size))
 }
 
 fn kwin_window_ids(output: &str) -> impl Iterator<Item = &str> {
@@ -831,7 +912,8 @@ fn parse_gamescope_output_size(args: &[String]) -> Option<(u32, u32)> {
 mod tests {
     use super::{
         GAMESCOPE_GEOMETRY_CHECK_INTERVAL, display_from_environment, gamescope_geometry_check_due,
-        kwin_number, kwin_window_ids, parse_gamescope_output_size, select_monitor,
+        kwin_number, kwin_window_ids, parse_gamescope_output_size, parse_mutter_geometry,
+        select_monitor,
     };
     use std::time::Instant;
     use x11rb::protocol::randr::MonitorInfo;
@@ -894,5 +976,13 @@ mod tests {
         assert_eq!(kwin_number(info, "pid"), Some(100105.0));
         assert_eq!(kwin_number(info, "x"), Some(1920.0));
         assert_eq!(kwin_number(info, "height"), Some(1440.0));
+    }
+
+    #[test]
+    fn parses_gamescope_geometry_from_mutter_bridge() {
+        let geometry = parse_mutter_geometry("(true, -1920, 154, 1920, 1080)\n").unwrap();
+        assert_eq!(geometry.0, glam::Vec2::new(-1920.0, 154.0));
+        assert_eq!(geometry.1, glam::Vec2::new(1920.0, 1080.0));
+        assert!(parse_mutter_geometry("(false, 0, 0, 0, 0)").is_none());
     }
 }

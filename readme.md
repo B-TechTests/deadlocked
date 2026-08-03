@@ -155,6 +155,19 @@ The overlay detects Gamescope and follows its window position and size automatic
 window is not available yet and `-W`/`-H` were omitted, it uses the native primary-monitor
 resolution. If that cannot be detected, it falls back to 1920x1080.
 
+On GNOME Shell 45 or newer with Wayland, install the included Mutter bridge once so deadlocked can
+receive the native Gamescope window geometry:
+
+```bash
+extension_dir="$HOME/.local/share/gnome-shell/extensions/gamescope-tracker@deadlocked"
+mkdir -p "$extension_dir"
+cp resources/gnome-shell-extension/gamescope-tracker@deadlocked/* "$extension_dir/"
+gnome-extensions enable gamescope-tracker@deadlocked
+```
+
+Log out and back in if GNOME does not detect the newly installed extension immediately. The bridge
+tracks the Gamescope PID and never uses the focused window, active monitor, or cursor position.
+
 ### My screen/overlay is black
 
 Your compositor or window manager doesn't support transparency, or it's not enabled.

@@ -1,0 +1,6 @@
+{
+  "name": "Deadlocked Gamescope Tracker",
+  "description": "Exposes the Gamescope window geometry to deadlocked on GNOME Wayland.",
+  "uuid": "gamescope-tracker@deadlocked",
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}
