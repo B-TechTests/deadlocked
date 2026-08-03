@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::Path,
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -460,6 +461,7 @@ struct Gamescope {
     pid: i32,
     output_size: Option<Vec2>,
     x11: Option<GamescopeX11>,
+    kwin: Option<GamescopeKwin>,
 }
 
 impl Gamescope {
@@ -468,17 +470,27 @@ impl Gamescope {
             pid,
             output_size,
             x11: GamescopeX11::new(pid),
+            kwin: GamescopeKwin::new(pid),
         }
     }
 
     fn live_geometry(&self) -> Option<(Vec2, Vec2)> {
-        self.x11.as_ref()?.geometry(self.output_size)
+        self.x11
+            .as_ref()
+            .and_then(GamescopeX11::geometry)
+            .or_else(|| self.kwin.as_ref().map(GamescopeKwin::geometry))
+            .or_else(|| {
+                self.x11
+                    .as_ref()
+                    .and_then(|x11| x11.monitor_geometry(self.output_size))
+            })
     }
 
     fn update_geometry(&mut self) -> Option<(Vec2, Vec2)> {
         self.x11
-            .as_mut()?
-            .update_geometry(self.pid, self.output_size)
+            .as_mut()
+            .and_then(|x11| x11.update_geometry(self.pid))
+            .or_else(|| self.kwin.as_mut().and_then(GamescopeKwin::update_geometry))
     }
 
     fn fallback(&self) -> (Vec2, Vec2) {
@@ -504,6 +516,7 @@ struct GamescopeX11 {
 }
 
 const GAMESCOPE_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+const KWIN_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_GAMESCOPE_OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
 fn gamescope_geometry_check_due(last_check: Instant) -> bool {
@@ -532,19 +545,19 @@ impl GamescopeX11 {
         Some(x11)
     }
 
-    fn update_geometry(&mut self, pid: i32, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
+    fn update_geometry(&mut self, pid: i32) -> Option<(Vec2, Vec2)> {
         if !gamescope_geometry_check_due(self.last_geometry_check) {
             return None;
         }
         self.last_geometry_check = Instant::now();
-        self.refresh_geometry(pid, output_size)
+        self.refresh_geometry(pid)
     }
 
     fn track_window(&mut self, pid: i32) {
         self.window = self.find_window(pid);
     }
 
-    fn refresh_geometry(&mut self, pid: i32, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
+    fn refresh_geometry(&mut self, pid: i32) -> Option<(Vec2, Vec2)> {
         if let Some(window) = self.window {
             if let Some(geometry) = self.window_geometry(window) {
                 return Some(geometry);
@@ -553,7 +566,7 @@ impl GamescopeX11 {
         }
 
         self.track_window(pid);
-        self.geometry(output_size)
+        self.geometry()
     }
 
     fn find_window(&self, pid: i32) -> Option<Window> {
@@ -585,10 +598,8 @@ impl GamescopeX11 {
             .next()
     }
 
-    fn geometry(&self, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
-        self.window
-            .and_then(|window| self.window_geometry(window))
-            .or_else(|| self.monitor_geometry(output_size))
+    fn geometry(&self) -> Option<(Vec2, Vec2)> {
+        self.window.and_then(|window| self.window_geometry(window))
     }
 
     fn window_geometry(&self, window: Window) -> Option<(Vec2, Vec2)> {
@@ -631,6 +642,114 @@ fn select_monitor(monitors: &[MonitorInfo], size: Option<Vec2>) -> Option<&Monit
             .find(|monitor| monitor.primary)
             .or_else(|| monitors.first()),
     }
+}
+
+struct GamescopeKwin {
+    qdbus: &'static str,
+    uuid: String,
+    pid: i32,
+    geometry: (Vec2, Vec2),
+    last_geometry_check: Instant,
+}
+
+impl GamescopeKwin {
+    fn new(pid: i32) -> Option<Self> {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        if !desktop
+            .split(':')
+            .any(|name| name.eq_ignore_ascii_case("KDE"))
+        {
+            return None;
+        }
+
+        for qdbus in ["qdbus6", "qdbus"] {
+            let matches = command_output(
+                qdbus,
+                &[
+                    "--literal",
+                    "org.kde.KWin",
+                    "/WindowsRunner",
+                    "org.kde.krunner1.Match",
+                    "gamescope",
+                ],
+            );
+            for uuid in matches.as_deref().into_iter().flat_map(kwin_window_ids) {
+                let Some(geometry) = kwin_window_geometry(qdbus, uuid, pid) else {
+                    continue;
+                };
+                utils::info!("tracking gamescope KWin window {uuid}");
+                return Some(Self {
+                    qdbus,
+                    uuid: uuid.to_owned(),
+                    pid,
+                    geometry,
+                    last_geometry_check: Instant::now(),
+                });
+            }
+        }
+        None
+    }
+
+    fn geometry(&self) -> (Vec2, Vec2) {
+        self.geometry
+    }
+
+    fn update_geometry(&mut self) -> Option<(Vec2, Vec2)> {
+        if self.last_geometry_check.elapsed() < KWIN_GEOMETRY_CHECK_INTERVAL {
+            return None;
+        }
+        self.last_geometry_check = Instant::now();
+        let geometry = kwin_window_geometry(self.qdbus, &self.uuid, self.pid)?;
+        self.geometry = geometry;
+        Some(geometry)
+    }
+}
+
+fn kwin_window_ids(output: &str) -> impl Iterator<Item = &str> {
+    output.split("\"0_{").skip(1).filter_map(|value| {
+        let (uuid, _) = value.split_once("}\"")?;
+        uuid.bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            .then_some(uuid)
+    })
+}
+
+fn kwin_window_geometry(qdbus: &str, uuid: &str, pid: i32) -> Option<(Vec2, Vec2)> {
+    let info = command_output(
+        qdbus,
+        &[
+            "--literal",
+            "org.kde.KWin",
+            "/KWin",
+            "org.kde.KWin.getWindowInfo",
+            uuid,
+        ],
+    )?;
+    if kwin_number(&info, "pid")? as i32 != pid {
+        return None;
+    }
+    let position = Vec2::new(kwin_number(&info, "x")?, kwin_number(&info, "y")?);
+    let size = Vec2::new(kwin_number(&info, "width")?, kwin_number(&info, "height")?);
+    (size.x > 0.0 && size.y > 0.0).then_some((position, size))
+}
+
+fn kwin_number(output: &str, key: &str) -> Option<f32> {
+    let value = output
+        .split_once(&format!("\"{key}\" = [Variant("))?
+        .1
+        .split_once("): ")?
+        .1
+        .split_once(']')?
+        .0;
+    value.parse().ok()
+}
+
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn find_gamescope(mut pid: i32) -> Option<Gamescope> {
@@ -712,7 +831,7 @@ fn parse_gamescope_output_size(args: &[String]) -> Option<(u32, u32)> {
 mod tests {
     use super::{
         GAMESCOPE_GEOMETRY_CHECK_INTERVAL, display_from_environment, gamescope_geometry_check_due,
-        parse_gamescope_output_size, select_monitor,
+        kwin_number, kwin_window_ids, parse_gamescope_output_size, select_monitor,
     };
     use std::time::Instant;
     use x11rb::protocol::randr::MonitorInfo;
@@ -761,5 +880,19 @@ mod tests {
         ];
         let monitor = select_monitor(&monitors, None).unwrap();
         assert_eq!((monitor.width, monitor.height), (3440, 1440));
+    }
+
+    #[test]
+    fn parses_gamescope_window_identity_and_geometry_from_kwin() {
+        let matches = r#"[Argument: a(sssida{sv}) {[Argument: (sssida{sv}) "0_{ae8d8c6b-428a-4920-8c86-a1ca26f20ca0}", "Counter-Strike 2"]}]"#;
+        assert_eq!(
+            kwin_window_ids(matches).collect::<Vec<_>>(),
+            ["ae8d8c6b-428a-4920-8c86-a1ca26f20ca0"]
+        );
+
+        let info = r#"[Argument: a{sv} {"height" = [Variant(double): 1440], "pid" = [Variant(int): 100105], "width" = [Variant(double): 3440], "x" = [Variant(double): 1920], "y" = [Variant(double): 0]}]"#;
+        assert_eq!(kwin_number(info, "pid"), Some(100105.0));
+        assert_eq!(kwin_number(info, "x"), Some(1920.0));
+        assert_eq!(kwin_number(info, "height"), Some(1440.0));
     }
 }
