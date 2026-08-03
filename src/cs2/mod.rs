@@ -8,7 +8,7 @@ use glam::{IVec2, Mat4, Vec2, Vec3};
 use x11rb::{
     connection::Connection as _,
     protocol::{
-        randr::ConnectionExt as _,
+        randr::{ConnectionExt as _, MonitorInfo},
         xproto::{Atom, AtomEnum, ConnectionExt as _, Window},
     },
     rust_connection::RustConnection,
@@ -458,12 +458,12 @@ impl CS2 {
 
 struct Gamescope {
     pid: i32,
-    output_size: Vec2,
+    output_size: Option<Vec2>,
     x11: Option<GamescopeX11>,
 }
 
 impl Gamescope {
-    fn new(pid: i32, output_size: Vec2) -> Self {
+    fn new(pid: i32, output_size: Option<Vec2>) -> Self {
         Self {
             pid,
             output_size,
@@ -482,20 +482,29 @@ impl Gamescope {
     }
 
     fn fallback(&self) -> (Vec2, Vec2) {
-        (Vec2::ZERO, self.output_size)
+        self.x11
+            .as_ref()
+            .and_then(|x11| x11.monitor_geometry(self.output_size))
+            .unwrap_or_else(|| {
+                let (width, height) = self
+                    .output_size
+                    .map(|size| (size.x as u32, size.y as u32))
+                    .unwrap_or(DEFAULT_GAMESCOPE_OUTPUT_SIZE);
+                (Vec2::ZERO, Vec2::new(width as f32, height as f32))
+            })
     }
 }
 
 struct GamescopeX11 {
     connection: RustConnection,
     root: Window,
-    client_list: Atom,
     pid_atom: Atom,
     window: Option<Window>,
     last_geometry_check: Instant,
 }
 
 const GAMESCOPE_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_GAMESCOPE_OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
 fn gamescope_geometry_check_due(last_check: Instant) -> bool {
     last_check.elapsed() >= GAMESCOPE_GEOMETRY_CHECK_INTERVAL
@@ -505,12 +514,6 @@ impl GamescopeX11 {
     fn new(pid: i32) -> Option<Self> {
         let (connection, screen) = x11rb::connect(None).ok()?;
         let root = connection.setup().roots.get(screen)?.root;
-        let client_list = connection
-            .intern_atom(false, b"_NET_CLIENT_LIST")
-            .ok()?
-            .reply()
-            .ok()?
-            .atom;
         let pid_atom = connection
             .intern_atom(false, b"_NET_WM_PID")
             .ok()?
@@ -521,7 +524,6 @@ impl GamescopeX11 {
         let mut x11 = Self {
             connection,
             root,
-            client_list,
             pid_atom,
             window: None,
             last_geometry_check: Instant::now(),
@@ -530,7 +532,7 @@ impl GamescopeX11 {
         Some(x11)
     }
 
-    fn update_geometry(&mut self, pid: i32, output_size: Vec2) -> Option<(Vec2, Vec2)> {
+    fn update_geometry(&mut self, pid: i32, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
         if !gamescope_geometry_check_due(self.last_geometry_check) {
             return None;
         }
@@ -542,7 +544,7 @@ impl GamescopeX11 {
         self.window = self.find_window(pid);
     }
 
-    fn refresh_geometry(&mut self, pid: i32, output_size: Vec2) -> Option<(Vec2, Vec2)> {
+    fn refresh_geometry(&mut self, pid: i32, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
         if let Some(window) = self.window {
             if let Some(geometry) = self.window_geometry(window) {
                 return Some(geometry);
@@ -555,39 +557,35 @@ impl GamescopeX11 {
     }
 
     fn find_window(&self, pid: i32) -> Option<Window> {
-        let windows = self
-            .connection
-            .get_property(
-                false,
-                self.root,
-                self.client_list,
-                AtomEnum::WINDOW,
-                0,
-                u32::MAX,
-            )
-            .ok()?
-            .reply()
-            .ok()?;
-
-        windows.value32()?.find(|window| {
-            let Ok(cookie) = self.connection.get_property(
-                false,
-                *window,
-                self.pid_atom,
-                AtomEnum::CARDINAL,
-                0,
-                1,
-            ) else {
-                return false;
+        let mut parents = vec![self.root];
+        while let Some(parent) = parents.pop() {
+            let Ok(cookie) = self.connection.query_tree(parent) else {
+                continue;
             };
-            let Ok(reply) = cookie.reply() else {
-                return false;
+            let Ok(tree) = cookie.reply() else {
+                continue;
             };
-            reply.value32().and_then(|mut values| values.next()) == Some(pid as u32)
-        })
+            for window in tree.children {
+                if self.window_pid(window) == Some(pid as u32) {
+                    return Some(window);
+                }
+                parents.push(window);
+            }
+        }
+        None
     }
 
-    fn geometry(&self, output_size: Vec2) -> Option<(Vec2, Vec2)> {
+    fn window_pid(&self, window: Window) -> Option<u32> {
+        self.connection
+            .get_property(false, window, self.pid_atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()
+    }
+
+    fn geometry(&self, output_size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
         self.window
             .and_then(|window| self.window_geometry(window))
             .or_else(|| self.monitor_geometry(output_size))
@@ -607,20 +605,31 @@ impl GamescopeX11 {
         ))
     }
 
-    fn monitor_geometry(&self, size: Vec2) -> Option<(Vec2, Vec2)> {
-        let monitor = self
+    fn monitor_geometry(&self, size: Option<Vec2>) -> Option<(Vec2, Vec2)> {
+        let monitors = self
             .connection
             .randr_get_monitors(self.root, true)
             .ok()?
             .reply()
             .ok()?
-            .monitors
-            .into_iter()
-            .find(|monitor| monitor.width as f32 == size.x && monitor.height as f32 == size.y)?;
+            .monitors;
+        let monitor = select_monitor(&monitors, size)?;
         Some((
             Vec2::new(monitor.x as f32, monitor.y as f32),
             Vec2::new(monitor.width as f32, monitor.height as f32),
         ))
+    }
+}
+
+fn select_monitor(monitors: &[MonitorInfo], size: Option<Vec2>) -> Option<&MonitorInfo> {
+    match size {
+        Some(size) => monitors
+            .iter()
+            .find(|monitor| monitor.width as f32 == size.x && monitor.height as f32 == size.y),
+        None => monitors
+            .iter()
+            .find(|monitor| monitor.primary)
+            .or_else(|| monitors.first()),
     }
 }
 
@@ -638,8 +647,9 @@ fn find_gamescope(mut pid: i32) -> Option<Gamescope> {
             .and_then(|arg| Path::new(arg).file_name())
             .is_some_and(|name| name == "gamescope")
         {
-            let (width, height) = parse_gamescope_output_size(&args);
-            return Some(Gamescope::new(pid, Vec2::new(width as f32, height as f32)));
+            let output_size = parse_gamescope_output_size(&args)
+                .map(|(width, height)| Vec2::new(width as f32, height as f32));
+            return Some(Gamescope::new(pid, output_size));
         }
 
         pid = fs::read_to_string(format!("/proc/{pid}/status"))
@@ -665,7 +675,7 @@ fn display_from_environment(environment: &[u8]) -> Option<String> {
         .map(|display| String::from_utf8_lossy(display).into_owned())
 }
 
-fn parse_gamescope_output_size(args: &[String]) -> (u32, u32) {
+fn parse_gamescope_output_size(args: &[String]) -> Option<(u32, u32)> {
     let args = &args[..args
         .iter()
         .position(|arg| arg == "--")
@@ -682,23 +692,30 @@ fn parse_gamescope_output_size(args: &[String]) -> (u32, u32) {
     };
 
     let output_height = value("-H", "--output-height");
-    let height = output_height.unwrap_or(720);
-    let width = value("-W", "--output-width").unwrap_or_else(|| {
+    let output_width = value("-W", "--output-width");
+    if output_width.is_none() && output_height.is_none() {
+        return None;
+    }
+
+    let height = output_height.unwrap_or(DEFAULT_GAMESCOPE_OUTPUT_SIZE.1);
+    let width = output_width.unwrap_or_else(|| {
         if output_height.is_some() {
             height.saturating_mul(16) / 9
         } else {
-            1280
+            DEFAULT_GAMESCOPE_OUTPUT_SIZE.0
         }
     });
-    (width, height)
+    Some((width, height))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         GAMESCOPE_GEOMETRY_CHECK_INTERVAL, display_from_environment, gamescope_geometry_check_due,
+        parse_gamescope_output_size, select_monitor,
     };
     use std::time::Instant;
+    use x11rb::protocol::randr::MonitorInfo;
 
     #[test]
     fn gamescope_geometry_is_polled_periodically() {
@@ -711,5 +728,38 @@ mod tests {
     fn finds_gamescope_display_in_process_environment() {
         let environment = b"PATH=/usr/bin\0DISPLAY=:2\0XDG_SESSION_TYPE=wayland\0";
         assert_eq!(display_from_environment(environment).as_deref(), Some(":2"));
+    }
+
+    #[test]
+    fn gamescope_output_size_prefers_flags_then_native_detection() {
+        let args = |args: &[&str]| args.iter().map(|arg| (*arg).into()).collect::<Vec<_>>();
+        assert_eq!(parse_gamescope_output_size(&args(&["gamescope"])), None);
+        assert_eq!(
+            parse_gamescope_output_size(&args(&["gamescope", "-W", "2560", "-H", "1440"])),
+            Some((2560, 1440))
+        );
+        assert_eq!(
+            parse_gamescope_output_size(&args(&["gamescope", "-H", "1080"])),
+            Some((1920, 1080))
+        );
+    }
+
+    #[test]
+    fn native_detection_prefers_the_primary_monitor() {
+        let monitors = [
+            MonitorInfo {
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+            MonitorInfo {
+                primary: true,
+                width: 3440,
+                height: 1440,
+                ..Default::default()
+            },
+        ];
+        let monitor = select_monitor(&monitors, None).unwrap();
+        assert_eq!((monitor.width, monitor.height), (3440, 1440));
     }
 }

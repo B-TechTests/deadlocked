@@ -254,7 +254,6 @@ impl App {
             return;
         }
 
-        overlay.window().set_cursor_hittest(false).unwrap();
         {
             let data_guard = state.data.lock();
             Self::update_overlay_window(overlay, &data_guard);

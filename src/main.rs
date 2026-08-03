@@ -52,6 +52,7 @@ fn main() {
         Ok(event_loop) => event_loop,
         Err(err) => {
             utils::error!("failed to create event loop: {err}");
+            utils::error!("an X11 display is required; enable XWayland on Wayland compositors");
             return;
         }
     };

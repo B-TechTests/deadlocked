@@ -123,7 +123,9 @@ impl WindowContext {
             .unwrap();
 
         if overlay {
-            window.set_cursor_hittest(false).unwrap();
+            if let Err(err) = window.set_cursor_hittest(false) {
+                utils::error!("could not make overlay click-through: {err}");
+            }
             window.set_outer_position(winit::dpi::PhysicalPosition::new(0, 0));
         }
 

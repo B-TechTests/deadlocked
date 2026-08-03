@@ -122,6 +122,8 @@ Configs are saved in `$XDG_CONFIG_HOME` with fallback to `$HOME/.config`. Otherw
 
 ### Which desktop environments and window managers are supported?
 
+The overlay uses X11 directly. On Wayland sessions, XWayland must be installed and enabled.
+
 **Best support:**
 
 - GNOME (Mutter)
@@ -139,6 +141,9 @@ Configs are saved in `$XDG_CONFIG_HOME` with fallback to `$HOME/.config`. Otherw
 - XFCE
 - Hyprland (tweaks may be needed; no guarantees)
 
+i3 and OpenBox need a compositor for transparency. On Hyprland, disabling XWayland scaling may
+be necessary for correct overlay coordinates on scaled displays.
+
 ### I'm using Hyprland and something doesn't work
 
 Hyprland has poor X11 support for the techniques this cheat uses, not much i can do about that.
@@ -146,8 +151,9 @@ Try another WM if possible.
 
 ### I'm using Gamescope and the overlay is too small
 
-The game still thinks it's running in 16:9 resolution, so the cheat gets the wrong window resolution.
-Try running the game without Gamescope.
+The overlay detects Gamescope and follows its window position and size automatically. If the
+window is not available yet and `-W`/`-H` were omitted, it uses the native primary-monitor
+resolution. If that cannot be detected, it falls back to 1920x1080.
 
 ### My screen/overlay is black
 
