@@ -100,14 +100,14 @@ impl CS2 {
         if let Some(shot_time) = self.trigger.shot_start
             && now >= shot_time
         {
-            mouse.left_press();
+            mouse.left_press(self.gamescope_display.as_deref());
             self.trigger.shot_start = None;
         }
 
         if let Some(shot_end) = self.trigger.shot_end
             && now >= shot_end
         {
-            mouse.left_release();
+            mouse.left_release(self.gamescope_display.as_deref());
             self.trigger.shot_end = None;
         }
     }

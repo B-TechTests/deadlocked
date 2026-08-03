@@ -9,6 +9,13 @@ use std::{
 
 use glam::{IVec2, Vec2};
 use nix::{ioctl_none, ioctl_write_int, ioctl_write_ptr, libc::c_ulong};
+use x11rb::{
+    connection::Connection as _,
+    protocol::{
+        xproto::{BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT},
+        xtest::ConnectionExt as _,
+    },
+};
 
 #[derive(Clone, Copy)]
 struct Timeval {
@@ -162,12 +169,16 @@ impl Mouse {
         self.file.write_all(&syn.bytes()).unwrap();
     }
 
-    pub fn left_press(&mut self) {
-        self.key(1);
+    pub fn left_press(&mut self, display: Option<&str>) {
+        if !display.is_some_and(|display| x11_button(display, true)) {
+            self.key(1);
+        }
     }
 
-    pub fn left_release(&mut self) {
-        self.key(0);
+    pub fn left_release(&mut self, display: Option<&str>) {
+        if !display.is_some_and(|display| x11_button(display, false)) {
+            self.key(0);
+        }
     }
 
     fn key(&mut self, pressed: i32) {
@@ -194,6 +205,28 @@ impl Mouse {
         self.file.write_all(&press.bytes()).unwrap();
         self.file.write_all(&syn.bytes()).unwrap();
     }
+}
+
+fn x11_button(display: &str, pressed: bool) -> bool {
+    let Ok((connection, _)) = x11rb::connect(Some(display)) else {
+        return false;
+    };
+    let Ok(cookie) = connection.xtest_fake_input(
+        if pressed {
+            BUTTON_PRESS_EVENT
+        } else {
+            BUTTON_RELEASE_EVENT
+        },
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ) else {
+        return false;
+    };
+    cookie.check().is_ok() && connection.flush().is_ok()
 }
 
 impl Drop for Mouse {

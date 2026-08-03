@@ -8,11 +8,8 @@ use glam::{IVec2, Mat4, Vec2, Vec3};
 use x11rb::{
     connection::Connection as _,
     protocol::{
-        Event,
-        randr::{ConnectionExt as _, NotifyMask},
-        xproto::{
-            Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, Window,
-        },
+        randr::ConnectionExt as _,
+        xproto::{Atom, AtomEnum, ConnectionExt as _, Window},
     },
     rust_connection::RustConnection,
 };
@@ -70,6 +67,7 @@ pub struct CS2 {
     planted_c4: Option<PlantedC4>,
     gamescope: Option<Gamescope>,
     gamescope_geometry: Option<(Vec2, Vec2)>,
+    gamescope_display: Option<String>,
     last_cache: Instant,
 }
 
@@ -91,6 +89,13 @@ impl CS2 {
                 .live_geometry()
                 .unwrap_or_else(|| gamescope.fallback())
         });
+        self.gamescope_display = self
+            .gamescope
+            .as_ref()
+            .and_then(|_| process_display(self.process.pid));
+        if let Some(display) = &self.gamescope_display {
+            utils::info!("detected gamescope input display: {display}");
+        }
         if let Some((position, size)) = self.gamescope_geometry {
             utils::info!(
                 "detected gamescope geometry: {}x{} at {},{}",
@@ -334,6 +339,7 @@ impl CS2 {
             planted_c4: None,
             gamescope: None,
             gamescope_geometry: None,
+            gamescope_display: None,
             last_cache: Instant::now(),
         }
     }
@@ -486,6 +492,13 @@ struct GamescopeX11 {
     client_list: Atom,
     pid_atom: Atom,
     window: Option<Window>,
+    last_geometry_check: Instant,
+}
+
+const GAMESCOPE_GEOMETRY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+fn gamescope_geometry_check_due(last_check: Instant) -> bool {
+    last_check.elapsed() >= GAMESCOPE_GEOMETRY_CHECK_INTERVAL
 }
 
 impl GamescopeX11 {
@@ -505,98 +518,40 @@ impl GamescopeX11 {
             .ok()?
             .atom;
 
-        connection
-            .change_window_attributes(
-                root,
-                &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
-            )
-            .ok()?;
-        let _ = connection.randr_select_input(
-            root,
-            NotifyMask::SCREEN_CHANGE | NotifyMask::CRTC_CHANGE | NotifyMask::OUTPUT_CHANGE,
-        );
-
         let mut x11 = Self {
             connection,
             root,
             client_list,
             pid_atom,
             window: None,
+            last_geometry_check: Instant::now(),
         };
         x11.track_window(pid);
-        x11.connection.flush().ok()?;
         Some(x11)
     }
 
     fn update_geometry(&mut self, pid: i32, output_size: Vec2) -> Option<(Vec2, Vec2)> {
-        let mut rediscover_window = false;
-        let mut geometry_changed = false;
-
-        loop {
-            let event = match self.connection.poll_for_event() {
-                Ok(Some(event)) => event,
-                Ok(None) => break,
-                Err(_) => return None,
-            };
-
-            match event {
-                Event::ConfigureNotify(event) if Some(event.window) == self.window => {
-                    geometry_changed = true;
-                }
-                Event::MapNotify(event) if Some(event.window) == self.window => {
-                    geometry_changed = true;
-                }
-                Event::ReparentNotify(event) if Some(event.window) == self.window => {
-                    geometry_changed = true;
-                }
-                Event::DestroyNotify(event) if Some(event.window) == self.window => {
-                    self.window = None;
-                    rediscover_window = true;
-                    geometry_changed = true;
-                }
-                Event::UnmapNotify(event) if Some(event.window) == self.window => {
-                    self.window = None;
-                    rediscover_window = true;
-                    geometry_changed = true;
-                }
-                Event::PropertyNotify(event)
-                    if event.window == self.root && event.atom == self.client_list =>
-                {
-                    rediscover_window = true;
-                    geometry_changed = true;
-                }
-                Event::RandrNotify(_) | Event::RandrScreenChangeNotify(_) => {
-                    geometry_changed = true;
-                }
-                _ => {}
-            }
+        if !gamescope_geometry_check_due(self.last_geometry_check) {
+            return None;
         }
-
-        if rediscover_window {
-            self.track_window(pid);
-        }
-
-        if geometry_changed {
-            self.geometry(output_size)
-        } else {
-            None
-        }
+        self.last_geometry_check = Instant::now();
+        self.refresh_geometry(pid, output_size)
     }
 
     fn track_window(&mut self, pid: i32) {
-        let window = self.find_window(pid);
-        if window == self.window {
-            return;
-        }
-        self.window = window;
+        self.window = self.find_window(pid);
+    }
 
-        if let Some(window) = window {
-            let _ = self.connection.change_window_attributes(
-                window,
-                &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-            );
-            let _ = self.connection.flush();
+    fn refresh_geometry(&mut self, pid: i32, output_size: Vec2) -> Option<(Vec2, Vec2)> {
+        if let Some(window) = self.window {
+            if let Some(geometry) = self.window_geometry(window) {
+                return Some(geometry);
+            }
+            self.window = None;
         }
+
+        self.track_window(pid);
+        self.geometry(output_size)
     }
 
     fn find_window(&self, pid: i32) -> Option<Window> {
@@ -699,6 +654,17 @@ fn find_gamescope(mut pid: i32) -> Option<Gamescope> {
     None
 }
 
+fn process_display(pid: i32) -> Option<String> {
+    display_from_environment(&fs::read(format!("/proc/{pid}/environ")).ok()?)
+}
+
+fn display_from_environment(environment: &[u8]) -> Option<String> {
+    environment
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"DISPLAY="))
+        .map(|display| String::from_utf8_lossy(display).into_owned())
+}
+
 fn parse_gamescope_output_size(args: &[String]) -> (u32, u32) {
     let args = &args[..args
         .iter()
@@ -725,4 +691,25 @@ fn parse_gamescope_output_size(args: &[String]) -> (u32, u32) {
         }
     });
     (width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GAMESCOPE_GEOMETRY_CHECK_INTERVAL, display_from_environment, gamescope_geometry_check_due,
+    };
+    use std::time::Instant;
+
+    #[test]
+    fn gamescope_geometry_is_polled_periodically() {
+        let last_check = Instant::now() - GAMESCOPE_GEOMETRY_CHECK_INTERVAL;
+        assert!(gamescope_geometry_check_due(last_check));
+        assert!(!gamescope_geometry_check_due(Instant::now()));
+    }
+
+    #[test]
+    fn finds_gamescope_display_in_process_environment() {
+        let environment = b"PATH=/usr/bin\0DISPLAY=:2\0XDG_SESSION_TYPE=wayland\0";
+        assert_eq!(display_from_environment(environment).as_deref(), Some(":2"));
+    }
 }
